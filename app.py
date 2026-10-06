@@ -26,13 +26,15 @@ from modules.utils import setup_logging, save_screenshot, draw_text_with_backgro
 from modules.camera import Camera, CameraError
 from modules.hand_tracker import HandTracker
 from modules.fps import FPS
+from modules.gesture_recognition import GestureRecognizer  # Phase 2 addition
 
 
 def print_controls(logger) -> None:
     """Logs and prints the keyboard control scheme once at startup."""
     controls = (
         "Controls: [q] Quit  |  [s] Save screenshot  |  "
-        "[l] Toggle landmark IDs  |  [b] Toggle bounding box"
+        "[l] Toggle landmark IDs  |  [b] Toggle bounding box  |  "
+        "[g] Toggle gesture debug overlay"
     )
     logger.info(controls)
     print(controls)
@@ -56,6 +58,7 @@ def main() -> int:
         # exception is thrown anywhere inside this block.
         with Camera(config.camera, logger) as camera:
             tracker = HandTracker(config.hand_tracker, config.display, logger)
+            recognizer = GestureRecognizer(config.gesture, logger)  # Phase 2 addition
             print_controls(logger)
 
             try:
@@ -68,6 +71,15 @@ def main() -> int:
                     # Core Phase 1 pipeline step: detect hands + get an
                     # annotated frame ready for display.
                     hands_data, annotated_frame = tracker.process(frame)
+
+                    # --- Phase 2 addition: gesture recognition ---
+                    # Runs on the primary (first-detected) hand only; feeds
+                    # straight off Phase 1's own HandData output.
+                    primary_hand = hands_data[0] if hands_data else None
+                    gesture_result = recognizer.recognize(primary_hand)
+                    if config.gesture.show_gesture_debug:
+                        recognizer.draw_overlay(annotated_frame, gesture_result)
+                    # --- end Phase 2 addition ---
 
                     current_fps = fps_meter.update()
                     if config.display.show_fps:
@@ -97,6 +109,10 @@ def main() -> int:
                     elif key == ord("b"):
                         config.display.show_bounding_box = not config.display.show_bounding_box
                         logger.info("Bounding box display toggled: %s", config.display.show_bounding_box)
+                    elif key == ord("g"):
+                        # Phase 2 addition: toggle the gesture debug overlay
+                        config.gesture.show_gesture_debug = not config.gesture.show_gesture_debug
+                        logger.info("Gesture debug overlay toggled: %s", config.gesture.show_gesture_debug)
 
                     # Detect the user closing the window via the OS 'X'
                     # button (waitKey alone does not catch this).

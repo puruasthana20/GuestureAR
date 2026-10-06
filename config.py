@@ -55,6 +55,37 @@ class DisplayConfig:
 
 
 @dataclass
+class GestureConfig:
+    """
+    Settings for the Phase 2 Gesture Recognition Engine (modules/gesture_recognition.py).
+    Added alongside the Phase 1 configs above without changing any of them -
+    every other dataclass in this file is untouched from Phase 1.
+    """
+    # --- Finger-state thresholds (see gesture_recognition.py's module docstring
+    #     section 1, "Finger Angles", for the geometry behind these numbers) ---
+    finger_angle_threshold: float = 160.0   # degrees; above this, a finger counts as EXTENDED
+    thumb_angle_threshold: float = 150.0    # thumb's IP-joint angle rarely reaches 160 even when straight
+    thumb_tuck_ratio: float = 0.6           # thumb_tip-to-index_MCP distance / palm_size; above this, thumb is "out"
+
+    # --- Distance-ratio thresholds (see section 2, "Distances") ---
+    pinch_distance_ratio: float = 0.4       # thumb_tip-to-index_tip distance / palm_size; below this = PINCH
+    spread_distance_ratio: float = 0.5      # index_tip-to-middle_tip distance / palm_size; above this = spread (Victory)
+
+    # --- Temporal smoothing (see section 4, "Temporal Tracking") ---
+    smoothing_window: int = 7               # number of recent frames considered for the majority vote
+    smoothing_majority_ratio: float = 0.6   # fraction of the window that must agree to confirm a gesture
+    min_confidence_to_display: float = 0.5  # below this, report Gesture.DETECTING instead of a low-confidence guess
+
+    # --- Swipe (motion) detection ---
+    swipe_history_len: int = 10             # frames of wrist position kept for swipe displacement checks
+    swipe_min_distance_ratio: float = 1.2   # net displacement / palm_size required to count as a deliberate swipe
+    swipe_cooldown_frames: int = 15         # frames to ignore new swipes for, right after one fires
+
+    # --- Display ---
+    show_gesture_debug: bool = True         # toggled at runtime with the 'g' key (see app.py)
+
+
+@dataclass
 class PathConfig:
     """Filesystem locations used by the app. Auto-creates required folders on startup."""
     root_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent)
@@ -74,6 +105,7 @@ class AppConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     hand_tracker: HandTrackerConfig = field(default_factory=HandTrackerConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
+    gesture: GestureConfig = field(default_factory=GestureConfig)  # Phase 2 addition
     paths: PathConfig = field(default_factory=PathConfig)
     log_level: str = "INFO"   # DEBUG | INFO | WARNING | ERROR | CRITICAL
 

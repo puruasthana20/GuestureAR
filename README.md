@@ -470,3 +470,217 @@ output into `screenshots/` for your project report.)*
 Phase 1 deliberately keeps `HandTracker` output in a clean, structured
 `HandData` format specifically so Phase 2 can build entirely on top of it
 without touching `camera.py`, `hand_tracker.py`, or `config.py` internals.
+
+---
+
+## 15. Phase 2 — Gesture Recognition Engine
+
+> **Note on the Phase 1 summary above:** the "No gesture classification
+> yet" limitation listed under Phase 1 is exactly what Phase 2 (this
+> section) now addresses. Everything else in Phase 1 — `camera.py`,
+> `hand_tracker.py`, `utils.py`, `fps.py`, `app.py`'s core loop — is
+> untouched; Phase 2 only *adds* `modules/gesture_recognition.py`, one new
+> `GestureConfig` dataclass in `config.py`, and a few additive lines in
+> `app.py` (new imports, one new instantiation, one new overlay call, one
+> new keyboard toggle).
+
+### New file: `modules/gesture_recognition.py`
+
+Consumes the `HandData` object Phase 1's `HandTracker` already produces
+and turns it into a named, smoothed, confidence-scored `GestureResult`
+every frame — without modifying anything upstream.
+
+### Gestures recognized
+
+| Static poses | Motion gestures |
+|---|---|
+| Open Palm | Swipe Left |
+| Closed Fist | Swipe Right |
+| Index Finger | Swipe Up |
+| Two Fingers | Swipe Down |
+| Victory | |
+| Thumbs Up | |
+| Pinch | |
+| Finger Count (0-5, fallback for any combination not named above) | |
+
+### 15.1 The Mathematics
+
+**Finger angles.** Every non-thumb finger is a 3-point chain MCP → PIP →
+TIP. The angle at the PIP joint is computed with the standard dot-product
+formula:
+
+```
+v1 = MCP - PIP
+v2 = TIP - PIP
+theta = arccos( (v1 . v2) / (|v1| * |v2|) )
+```
+
+A straight finger points `v1` and `v2` in nearly opposite directions
+(theta → 180°); a curled finger folds the tip back toward the MCP side
+(theta drops toward 90° or below). A finger counts as **extended** when
+`theta > finger_angle_threshold` (160° by default). The thumb gets its own
+rule — see "Reducing false positives" below — because its joints rotate on
+a different axis than the other four fingers.
+
+**Distances.** Every distance check in this module is a *ratio*, never a
+raw pixel number, because raw pixels change with how close the hand is to
+the camera. The reference scale is the hand's own **palm size**:
+
+```
+palm_size = distance(WRIST, MIDDLE_FINGER_MCP)
+ratio = distance(point_a, point_b) / palm_size
+```
+
+This is what lets a single `pinch_distance_ratio = 0.4` threshold work
+whether the hand fills the frame or sits far in the background.
+
+**Relative positions.** "Thumbs Up" isn't just "thumb extended" — it's
+"thumb extended *and pointing up*". Since OpenCV image coordinates
+increase downward, "pointing up on screen" means a *smaller* y value than
+the reference point: `thumb_tip.y < wrist.y - margin`.
+
+**Temporal tracking (swipes).** A swipe cannot be read from one frame —
+it's a motion, not a pose. `SwipeTracker` keeps the last
+`swipe_history_len` wrist positions in a `deque`, and on each frame
+computes the net displacement between the oldest and newest point,
+normalized by the average palm size over that window:
+
+```
+norm_dx = (newest.x - oldest.x) / avg_palm_size
+norm_dy = (newest.y - oldest.y) / avg_palm_size
+magnitude = sqrt(norm_dx^2 + norm_dy^2)
+```
+
+If `magnitude > swipe_min_distance_ratio` **and** one axis clearly
+dominates (`|norm_dx| > 2 * |norm_dy|` or vice versa), a `SWIPE_*` gesture
+fires, followed by a short cooldown so one physical swipe isn't reported
+five times as the hand decelerates.
+
+**Confidence score.** Every result blends two signals:
+
+```
+geometric_confidence = how far past its threshold this frame's reading landed
+temporal_confidence  = fraction of the recent frame-history buffer that agrees
+final_confidence = 0.5 * geometric_confidence + 0.5 * temporal_confidence
+```
+
+**Reducing false positives.** Rule-based classifiers are fragile right at
+a decision boundary. This module fights that five ways: (1) scale-invariant
+ratios instead of raw pixels; (2) the thumb gets *two* independent checks
+— an IP-joint angle **and** a tip-to-index-MCP distance — and both must
+agree, since either one alone is unreliable for the thumb's rotated joint
+axis; (3) majority-vote temporal smoothing, so one motion-blurred or
+briefly-occluded frame can't flip the displayed gesture; (4) a minimum-
+confidence floor — below it, the engine reports `DETECTING` rather than a
+possibly-wrong guess; (5) a swipe cooldown window, so one motion can't
+double-fire.
+
+### 15.2 How This Would Later Become Machine Learning
+
+Every rule above is a hand-written decision boundary over a feature
+vector: 5 finger angles, a handful of normalized distances, two relative-
+position checks. That is *exactly* the input a small classifier
+(`sklearn.ensemble.RandomForestClassifier`, an SVM, or a tiny feed-forward
+network) is trained on. The migration path is a single seam:
+
+1. Log `FingerAnalyzer.analyze()`'s output (or the raw 21×3 landmark
+   array) alongside a human-provided label for many recorded gestures.
+2. Train a classifier offline on that logged dataset.
+3. Replace the body of `GestureRecognizer._classify_static_pose()` with
+   `self._model.predict(feature_vector)`. Everything else — `HandData`
+   input, palm-size normalization, temporal smoothing, swipe tracking,
+   confidence blending, the on-screen overlay — stays exactly as-is.
+
+The stub method `GestureRecognizer._classify_with_ml()` marks precisely
+where that swap happens; it deliberately raises `NotImplementedError` in
+Phase 2, which asks for rule-based classification first.
+
+### 15.3 Smoothing, Noise Reduction & Live Overlay
+
+`GestureRecognizer` keeps a `deque(maxlen=smoothing_window)` of raw
+per-frame labels (default window: 7 frames). A label is only "confirmed"
+once it holds at least `smoothing_majority_ratio` (60%) of that window;
+otherwise the engine reports `DETECTING`. Losing hand tracking
+immediately clears both this buffer and the swipe tracker, so a
+lost-and-reacquired hand never produces a spurious swipe from the gap.
+
+`recognizer.draw_overlay()` adds three new lines directly below Phase 1's
+existing FPS / hand-count overlay:
+
+```
+Tracking: Active / Lost
+Gesture: <name>
+Confidence: <NN%>
+```
+
+Toggle it at runtime with the new **`g`** key (added alongside Phase 1's
+existing `q` / `s` / `l` / `b` controls).
+
+### 15.4 Diagrams
+
+- `docs/uml_class_diagram.png` — class relationships (`Gesture`,
+  `FingerStates`, `GestureResult`, `FingerAnalyzer`, `SwipeTracker`,
+  `GestureRecognizer`, and how they connect to Phase 1's `HandData`).
+- `docs/architecture_diagram.png` — full pipeline: Camera → HandTracker
+  (Phase 1) → FingerAnalyzer/SwipeTracker → rule chain → temporal
+  smoothing → confidence blending → `GestureResult` → `app.py` overlay
+  (Phase 2), unchanged Phase 1 stages shown alongside the new ones.
+
+### 15.5 Testing
+
+`tests/test_gesture_recognition.py` adds 33 CI-safe unit tests (no
+webcam/MediaPipe needed) covering:
+- the pure math helpers (`euclidean_distance`, `calculate_angle`,
+  `get_palm_size`) against hand-verified geometry;
+- `FingerAnalyzer` on synthetic extended/curled/thumb landmark sets;
+- every named gesture's classification, including the Victory-vs-
+  Two-Fingers spread distinction and Pinch's override priority;
+- temporal smoothing (confirms after a majority, survives one noisy
+  frame, reports `DETECTING` when no majority exists);
+- `SwipeTracker` in all four directions, plus rejection of too-small and
+  too-diagonal motion, plus the cooldown window;
+- the no-hand-tracked path and history reset on tracking loss.
+
+Run the whole suite (Phase 1 + Phase 2) with:
+```bash
+pytest tests/ -v
+```
+
+### 15.6 Phase 2 Summary
+
+**✅ What has been completed**
+- `modules/gesture_recognition.py`: `FingerAnalyzer`, `SwipeTracker`, and
+  `GestureRecognizer` implementing all 12 required gestures, rule-based,
+  with palm-size-normalized geometry throughout.
+- Temporal smoothing (majority vote), a blended geometric+temporal
+  confidence score, and a documented false-positive mitigation strategy.
+- Live overlay (Tracking / Gesture / Confidence) toggle, wired into
+  `app.py` alongside the existing FPS counter with zero Phase 1 rewrites.
+- 33 new unit tests, all passing, verified against hand-checked geometry.
+- UML class diagram and full pipeline architecture diagram.
+
+**⚠️ Current limitations**
+- Rule-based thresholds were tuned against synthetic geometry, not a
+  large real-world sample of hands, lighting conditions, or skin tones —
+  real-world recalibration of `GestureConfig`'s defaults is expected.
+- Two Fingers vs. Victory relies on tip spread alone; an in-between hand
+  pose near the threshold can occasionally flip between the two.
+- Swipe detection tracks the wrist only; it doesn't yet distinguish a
+  deliberate swipe from the user simply repositioning their whole hand
+  before making a different pose.
+- No multi-hand gesture combinations yet (e.g. two-handed gestures) —
+  `recognize()` currently classifies one primary hand per frame.
+- Confidence is a heuristic blend, not a calibrated probability — it is
+  useful for relative comparison and thresholding, not as a statistically
+  rigorous certainty measure.
+
+**🚀 Future improvements**
+- Train the ML classifier described in section 15.2 on real, logged
+  gesture data to replace or ensemble with the rule-based chain.
+- Add per-user calibration (hand size, preferred thresholds) building on
+  Phase 1's already-normalized landmark pipeline.
+- Extend `SwipeTracker`-style temporal tracking to full-hand trajectories
+  for more complex motion gestures (circles, multi-step gestures).
+- Feed `GestureResult` into the action-mapping and AR-overlay layers
+  described in Phase 1's original "How Phase 2 Will Extend This" roadmap
+  (now Phases 3+ from here).

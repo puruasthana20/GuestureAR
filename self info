@@ -1,0 +1,117 @@
+"""
+app.py
+=======
+Entry point for Phase 1 of the AR-Based Gesture Controlled System.
+
+Responsibilities:
+  1. Initialize logging + load config.
+  2. Open the webcam via the Camera module (as a context manager, so it
+     is guaranteed to be released even if something crashes).
+  3. Run every captured frame through HandTracker to get landmarks +
+     an annotated preview frame.
+  4. Overlay FPS and hand-count text.
+  5. Handle keyboard controls (quit, screenshot, toggle overlays).
+  6. Guarantee clean shutdown of camera + MediaPipe resources on exit,
+     whether that exit is normal (user pressed 'q') or an exception.
+
+Run with:   python app.py
+Quit with:  'q' key, or close the OpenCV window
+
+
+"""
+config.py
+==========
+Centralized configuration for the AR-Based Gesture Controlled System.
+
+Design rationale:
+- All tunable parameters live in ONE place so that every module (camera,
+  hand tracker, app loop) reads consistent values instead of hardcoding
+  magic numbers across the codebase. This is critical for an "industrial
+  quality" project: when Phase 2 adds gesture classification or a PyQt5
+  GUI, those modules will import the SAME config object and never drift
+  out of sync with camera/tracker settings.
+- Python's `dataclass` gives us type hints, default values, and easy
+  extensibility without boilerplate __init__ methods.
+- A single module-level `config` instance is created at the bottom of
+  this file and imported everywhere else (`from config import config`).
+  This is the standard "singleton via module" pattern in Python - since
+  modules are only ever imported once and cached in sys.modules, every
+  file that imports `config` gets the exact same object in memory.
+"""
+
+"""
+modules/hand_tracker.py
+=========================
+Wraps Google's MediaPipe Hands solution to provide:
+  - multi-hand detection (Left / Right / multiple hands simultaneously)
+  - 21-landmark extraction per hand, in BOTH pixel and normalized coords
+  - a padded bounding box per hand
+  - skeleton + label + landmark-ID drawing on the output frame
+
+This module is the "brain" of Phase 1. Every other module (camera, fps,
+utils) exists to feed frames into this module and display its output.
+Phase 2 (gesture classification) will consume the `HandData` objects this
+module returns without needing to touch MediaPipe directly at all.
+"""
+"""
+modules/fps.py
+===============
+FPS (Frames Per Second) measurement utility.
+
+Why a dedicated module?
+- FPS logic is needed for on-screen display NOW, and will be needed for
+  performance logging/analytics dashboards in later phases. Isolating it
+  here avoids duplicating timing code inside app.py or hand_tracker.py.
+
+Approach:
+- Uses an Exponential Moving Average (EMA) instead of a raw frame-to-frame
+  delta, so the displayed number doesn't jitter wildly between frames
+  (e.g. 28 -> 45 -> 22 -> 40). This gives a stable, readable FPS counter.
+"""
+"""
+modules/camera.py
+===================
+Wraps cv2.VideoCapture with:
+  - robust initialization + error handling (raises a clear, catchable
+    exception instead of silently returning black frames)
+  - configurable resolution / target FPS / buffer size
+  - context-manager support (`with Camera(...) as cam:`) for guaranteed
+    resource cleanup even if an exception occurs mid-loop
+  - structured logging of every lifecycle event
+
+Isolating camera logic here means app.py - and any future module such as
+a PyQt5 GUI in Phase 2 - can reuse this exact, tested camera interface
+instead of re-implementing raw cv2.VideoCapture calls in multiple places.
+"""
+
+
+"""
+modules/utils.py
+=================
+Generic helper functions shared across the project: logging setup,
+screenshot saving, drawing helpers, and bounding-box math.
+
+Keeping these here (instead of duplicating logic inside camera.py /
+hand_tracker.py / app.py) follows the DRY (Don't Repeat Yourself)
+principle demanded by an industrial-quality codebase.
+"""
+
+"""
+    High-level webcam interface built on top of cv2.VideoCapture.
+
+    Usage:
+        with Camera(config.camera, logger) as cam:
+            ret, frame = cam.read()
+            if ret:
+                ... process frame ...
+        # camera is automatically released here, even on exception
+    """
+class HandTracker:
+    """
+    High-level interface around mediapipe.solutions.hands.
+
+    Typical per-frame usage:
+        hands_data, annotated_frame = tracker.process(frame)
+        for hand in hands_data:
+            print(hand.label, hand.bounding_box)
+    """
