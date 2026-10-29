@@ -86,6 +86,25 @@ class GestureConfig:
 
 
 @dataclass
+class AROverlayConfig:
+    """
+    Settings for the Phase 3 AR User Interface (modules/ui_elements.py,
+    modules/ar_overlay.py, modules/interaction.py). Added alongside the
+    Phase 1/2 configs without changing any of them.
+    """
+    theme: str = "dark"                     # "dark" or "light"; toggle at runtime with 't'
+    panel_alpha: float = 0.65               # opacity of the translucent panel layer
+    show_ar_overlay: bool = True            # toggled at runtime with 'a'
+    pointer_smoothing: float = 0.5          # 0-1; higher = smoother but laggier cursor (EMA)
+    dwell_seconds: float = 1.2              # hover time for a hands-free (dwell) selection
+    pinch_drag_enabled: bool = True         # allow pinch-and-drag on sliders
+    hover_animation_speed: float = 8.0
+    press_animation_speed: float = 14.0
+    notification_duration: float = 2.5      # seconds a toast stays visible
+    max_notifications: int = 4
+
+
+@dataclass
 class PathConfig:
     """Filesystem locations used by the app. Auto-creates required folders on startup."""
     root_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent)
@@ -106,6 +125,7 @@ class AppConfig:
     hand_tracker: HandTrackerConfig = field(default_factory=HandTrackerConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
     gesture: GestureConfig = field(default_factory=GestureConfig)  # Phase 2 addition
+    ar: AROverlayConfig = field(default_factory=AROverlayConfig)  # Phase 3 addition
     paths: PathConfig = field(default_factory=PathConfig)
     log_level: str = "INFO"   # DEBUG | INFO | WARNING | ERROR | CRITICAL
 

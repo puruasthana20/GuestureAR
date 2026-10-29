@@ -27,6 +27,9 @@ from modules.camera import Camera, CameraError
 from modules.hand_tracker import HandTracker
 from modules.fps import FPS
 from modules.gesture_recognition import GestureRecognizer  # Phase 2 addition
+from modules.ar_overlay import AROverlay  # Phase 3 addition
+from modules.interaction import InteractionEngine  # Phase 3 addition
+from modules.ui_elements import Button, ToggleSwitch, VolumeBar, BrightnessBar, StatusIndicator  # Phase 3 addition
 
 
 def print_controls(logger) -> None:
@@ -34,10 +37,45 @@ def print_controls(logger) -> None:
     controls = (
         "Controls: [q] Quit  |  [s] Save screenshot  |  "
         "[l] Toggle landmark IDs  |  [b] Toggle bounding box  |  "
-        "[g] Toggle gesture debug overlay"
+        "[g] Toggle gesture debug overlay  |  "
+        "[a] Toggle AR overlay  |  [t] Toggle light/dark theme"
     )
     logger.info(controls)
     print(controls)
+
+
+def build_demo_ar_interface(ar_overlay: AROverlay, logger) -> None:
+    """
+    Phase 3 addition. Populates `ar_overlay` with a small demo interface:
+    two buttons, a toggle, volume/brightness bars and a status badge. A real
+    application would build its own element set the same way: create
+    elements, optionally attach `on_click`, call `ar_overlay.add_element()`.
+    """
+
+    def on_start(_elem):
+        logger.info("Demo 'Start' button selected.")
+        ar_overlay.add_notification("Start selected", kind="success")
+
+    def on_stop(_elem):
+        logger.info("Demo 'Stop' button selected.")
+        ar_overlay.add_notification("Stop selected", kind="warning")
+
+    btn_start = Button("btn_start", anchor_x=0.03, anchor_y=0.70, width=0.14, height=0.09, label="Start")
+    btn_start.on_click = on_start
+    ar_overlay.add_element(btn_start)
+
+    btn_stop = Button("btn_stop", anchor_x=0.19, anchor_y=0.70, width=0.14, height=0.09, label="Stop")
+    btn_stop.on_click = on_stop
+    ar_overlay.add_element(btn_stop)
+
+    ar_overlay.add_element(ToggleSwitch(
+        "toggle_demo", anchor_x=0.03, anchor_y=0.84, width=0.09, height=0.04,
+        value=True, label="Demo Toggle"))
+    ar_overlay.add_element(VolumeBar("volume", anchor_x=0.90, anchor_y=0.10, width=0.035, height=0.30, value=0.6))
+    ar_overlay.add_element(BrightnessBar("brightness", anchor_x=0.95, anchor_y=0.10, width=0.035, height=0.30, value=0.5))
+    ar_overlay.add_element(StatusIndicator(
+        "status_ar", anchor_x=0.03, anchor_y=0.03, width=0.20, height=0.06,
+        label="AR UI", value="Ready", status="good"))
 
 
 def main() -> int:
@@ -59,6 +97,9 @@ def main() -> int:
         with Camera(config.camera, logger) as camera:
             tracker = HandTracker(config.hand_tracker, config.display, logger)
             recognizer = GestureRecognizer(config.gesture, logger)  # Phase 2 addition
+            ar_overlay = AROverlay(config.ar, logger)  # Phase 3 addition
+            interaction_engine = InteractionEngine(config.ar, logger)  # Phase 3 addition
+            build_demo_ar_interface(ar_overlay, logger)  # Phase 3 addition
             print_controls(logger)
 
             try:
@@ -80,6 +121,14 @@ def main() -> int:
                     if config.gesture.show_gesture_debug:
                         recognizer.draw_overlay(annotated_frame, gesture_result)
                     # --- end Phase 2 addition ---
+
+                    # --- Phase 3 addition: AR overlay + interaction ---
+                    frame_h, frame_w = annotated_frame.shape[:2]
+                    interaction_state = interaction_engine.update(
+                        ar_overlay, primary_hand, gesture_result, frame_w, frame_h
+                    )
+                    annotated_frame = ar_overlay.render(annotated_frame, interaction_state)
+                    # --- end Phase 3 addition ---
 
                     current_fps = fps_meter.update()
                     if config.display.show_fps:
@@ -113,6 +162,13 @@ def main() -> int:
                         # Phase 2 addition: toggle the gesture debug overlay
                         config.gesture.show_gesture_debug = not config.gesture.show_gesture_debug
                         logger.info("Gesture debug overlay toggled: %s", config.gesture.show_gesture_debug)
+                    elif key == ord("a"):
+                        # Phase 3 addition: toggle the AR overlay on/off
+                        config.ar.show_ar_overlay = not config.ar.show_ar_overlay
+                        logger.info("AR overlay toggled: %s", config.ar.show_ar_overlay)
+                    elif key == ord("t"):
+                        # Phase 3 addition: switch between dark/light theme
+                        ar_overlay.toggle_theme()
 
                     # Detect the user closing the window via the OS 'X'
                     # button (waitKey alone does not catch this).

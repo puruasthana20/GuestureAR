@@ -684,3 +684,113 @@ pytest tests/ -v
 - Feed `GestureResult` into the action-mapping and AR-overlay layers
   described in Phase 1's original "How Phase 2 Will Extend This" roadmap
   (now Phases 3+ from here).
+
+---
+
+## 16. Phase 3 — AR User Interface
+
+> Phase 3 only **adds** `modules/ui_elements.py`, `modules/ar_overlay.py`,
+> `modules/interaction.py`, an `AROverlayConfig` dataclass in `config.py`, and
+> additive lines in `app.py` (marked `# Phase 3 addition`). Phase 1 and 2
+> modules are untouched.
+
+| Module | Responsibility |
+|---|---|
+| `ui_elements.py` | **What widgets look like**: `Button`, `ToggleSwitch`, `Slider`, `VolumeBar`, `BrightnessBar`, `StatusIndicator`, `NotificationToast`, `Cursor`, dark/light `Theme`. |
+| `ar_overlay.py` | **How widgets are composited** onto the camera frame (2-pass render, themes, notifications). |
+| `interaction.py` | **How the hand drives widgets**: pointer tracking, collision detection, virtual click, dwell timer, slider drag. |
+
+### 16.1 How the AR overlay works
+Each frame `ar_overlay.render(frame, interaction_state)` runs:
+1. reuse a same-size scratch canvas and clear it;
+2. **Pass 1** - every element draws only its soft panel fill onto the scratch canvas (`draw_panel`);
+3. **one** `cv2.addWeighted(overlay, panel_alpha, frame, 1.0, 0, frame)` blends all panels (this is the transparency);
+4. **Pass 2** - every element draws crisp borders/text/icons/fills directly on the blended frame (`draw_crisp`);
+5. notification toasts, then the cursor last (always on top).
+
+The order matters: anything drawn on `frame` *before* the blend gets painted over by the translucent panel and looks washed out.
+
+### 16.2 Coordinate transformation
+Elements store position/size as normalized values in [0, 1]:
+```
+pixel_x = anchor_x * frame_width     pixel_w = width  * frame_width
+pixel_y = anchor_y * frame_height    pixel_h = height * frame_height
+```
+Chain: MediaPipe normalized landmark -> pixel landmark (Phase 1) -> EMA-smoothed
+index-fingertip cursor -> compared with each element's pixel rect (recomputed every
+frame). Because it is recomputed every frame, a new camera resolution rescales the
+whole interface automatically - this is the "resizable interface". It is the same
+scale-invariance idea as Phase 2's palm-size ratios.
+
+### 16.3 Drawing pipeline
+`update_animation()` -> `draw_panel()` -> blend -> `draw_crisp()` -> toasts -> cursor.
+Rounded rectangles are built from rectangles + corner arcs (OpenCV has none); icons are
+drawn with primitives, so no image assets are needed.
+
+### 16.4 Interaction engine
+1. **Pointer tracking** - `smoothed = smoothed * a + raw * (1 - a)` on the index fingertip.
+2. **Collision detection** - axis-aligned bounding-box point test; first hit = hovered.
+3. **Virtual click** - Phase 2's `Gesture.PINCH` is the mouse button: pinch start over an
+   element = PRESSED; pinch end over the same element = click. Leaving mid-pinch cancels.
+4. **Selection timer (dwell)** - hover without pinching for `dwell_seconds` (1.2 s) also clicks;
+   an arc fills around the cursor; leaving resets it.
+5. **Slider drag** - while pinch-held, the value follows the cursor.
+
+Reactions: **hover** (grow + accent border), **pinch** (press tint), **selection** (pulse ring + toast), **release** (click callback).
+
+### 16.5 Animation, transparency, themes
+- Animation: `progress += (target - progress) * (1 - exp(-speed * dt))` (frame-rate independent).
+- Transparency: `panel_alpha` (0.65) for panels; toasts fade in/out.
+- Themes: `DARK_THEME` / `LIGHT_THEME`, switch with **`t`**; elements never cache colors.
+
+### 16.6 Optimization
+Scratch canvas allocated once per resolution (`overlay[:] = 0`); one `addWeighted` per
+frame; only native OpenCV drawing calls (no per-pixel Python loops); O(N) loops over a few
+widgets; notification list capped.
+
+### 16.7 Diagrams (in `docs/`)
+`ui_layout_diagram.png`, `interaction_flow_diagram.png`, `module_architecture_diagram.png`.
+
+### 16.8 New keys
+`a` toggle AR overlay, `t` toggle light/dark theme (plus existing `q s l b g`).
+
+### 16.9 Testing guide
+**Automated:** `pytest tests/ -v` -> **84 tests** (Phase 1: 11, Phase 2: 33, Phase 3: 40).
+
+**Manual checklist** (`python app.py`):
+- [ ] Demo UI shows Start/Stop buttons, toggle, Volume + Brightness bars, "AR UI: Ready" badge.
+- [ ] Index fingertip moves a ring cursor smoothly.
+- [ ] Cursor over a button -> it grows and its border turns accent colored (**hover**).
+- [ ] Pinch over a button -> it tints (**press**), cursor ring tightens.
+- [ ] Release over the same button -> pulse ring + toast "Start selected" (**click**).
+- [ ] Pinch, drag off, release -> **no** click.
+- [ ] Hold cursor on a button ~1.2 s without pinching -> arc fills, then clicks (**dwell**).
+- [ ] Pinch on Volume/Brightness bar and move -> fill and percentage follow.
+- [ ] `t` -> light theme with readable text; `t` again -> dark.
+- [ ] `a` -> overlay hides/shows.
+- [ ] Remove your hand -> cursor disappears, nothing stays pressed.
+
+**Expected output screenshots** (rendered by the real code): `docs/screenshot_hover.png`,
+`screenshot_click.png`, `screenshot_slider_drag.png`, `screenshot_light_theme.png`,
+`screenshot_resized_640x480.png`.
+
+### 16.10 Bugs found and fixed during Phase 3 testing
+1. **Washed-out text** - crisp text was drawn before the panel blend. Fixed by the
+   `draw_panel()` / `draw_crisp()` split (regression test included).
+2. **Frozen toggle knob** - `dt` was computed after the base class reset the timestamp.
+   Fixed by capturing `dt` before `super().update_animation()` (regression test included).
+
+### 16.11 Phase 3 summary
+**Completed:** floating buttons, virtual sliders, toggle switches, volume and brightness
+bars, cursor, status indicators, notifications; hover/pinch/selection/release reactions;
+collision detection, pointer tracking, virtual click, selection timer, animation,
+transparency; resizable interface; dark and light themes; 40 new tests; 3 diagrams; 5 real
+rendered screenshots.
+
+**Limitations:** visuals verified on synthetic frames, not a live webcam; pinching moves the
+fingertip slightly, which can nudge the cursor as you click; one hand drives the UI; first
+overlapping element wins (no z-order); widgets change on-screen state only and do not yet
+control the real OS.
+
+**Next (Phase 4):** connect `on_click` callbacks and slider values to real PC control (mouse,
+keyboard, volume, apps) and mobile control.
